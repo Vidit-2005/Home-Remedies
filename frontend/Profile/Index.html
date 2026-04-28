@@ -20,7 +20,6 @@
       const { useState, useEffect } = React;
 
       const API_BASE_URL = "http://localhost:5000";
-      const SAVED_REMEDIES_KEY = "homeRemediesSaved";
 
       const requestJson = async (path, options = {}) => {
         const response = await fetch(`${API_BASE_URL}${path}`, {
@@ -40,6 +39,11 @@
         return data;
       };
 
+      const getAuthHeaders = () => {
+        const token = localStorage.getItem("homeRemediesToken");
+        return token ? { Authorization: `Bearer ${token}` } : {};
+      };
+
       const mapBackendRemedy = (remedy, index = 0) => ({
         id: remedy._id || remedy.id,
         name: remedy.title || remedy.name || "Untitled Remedy",
@@ -55,6 +59,28 @@
           "Home Remedies",
         contributorEmail: remedy.user_id?.email || remedy.contributorEmail || "",
       });
+
+      const normalizeSavedRemedy = (remedy, index = 0) => mapBackendRemedy(remedy, index);
+
+      const getDisplayName = (user) =>
+        user?.name || user?.username || user?.email?.split("@")[0] || "User";
+
+      const normalizeUser = (user) => ({
+        ...user,
+        name: getDisplayName(user),
+      });
+
+      const formatMemberSince = (createdAt) => {
+        if (!createdAt) return "Member since —";
+
+        const date = new Date(createdAt);
+        if (Number.isNaN(date.getTime())) return "Member since —";
+
+        return `Member since ${date.toLocaleDateString("en-US", {
+          month: "short",
+          year: "numeric",
+        })}`;
+      };
 
       // ==================== TOAST NOTIFICATION ====================
       const Toast = ({ message, type, onClose }) => {
@@ -91,7 +117,7 @@
                   <div className="user-avatar me-2">
                     <i className="bi bi-person-fill"></i>
                   </div>
-                  <span>{user?.name || user?.email?.split("@")[0] || "User"}</span>
+                  <span>{getDisplayName(user)}</span>
                 </button>
                 <ul className="dropdown-menu dropdown-menu-end">
                   <li><a className="dropdown-item active" href="#"><i className="bi bi-person me-2"></i>My Profile</a></li>
@@ -107,7 +133,7 @@
       );
 
       // ==================== PROFILE HEADER ====================
-      const ProfileHeader = ({ user, stats }) => (
+      const ProfileHeader = ({ user, stats, isVerified }) => (
         <div className="profile-header">
           <div className="container">
             <div className="row align-items-center">
@@ -117,12 +143,12 @@
                 </div>
               </div>
               <div className="col">
-                <h1 className="profile-name gradient-text">{user?.name || "User"}</h1>
+                <h1 className="profile-name gradient-text">{getDisplayName(user)}</h1>
                 <p className="profile-email"><i className="bi bi-envelope me-2"></i>{user?.email}</p>
                 <div className="profile-badges">
-                  {user?.isAdmin && <span className="badge bg-warning"><i className="bi bi-shield-check me-1"></i>Admin</span>}
-                  <span className="badge bg-info"><i className="bi bi-calendar me-1"></i>Member since 2024</span>
-                  <span className="badge bg-success"><i className="bi bi-patch-check me-1"></i>Verified</span>
+                  {user?.role === "admin" && <span className="badge bg-warning"><i className="bi bi-shield-check me-1"></i>Admin</span>}
+                  <span className="badge bg-info"><i className="bi bi-calendar me-1"></i>{formatMemberSince(user?.created_at || user?.createdAt)}</span>
+                  {isVerified && <span className="badge bg-success"><i className="bi bi-patch-check me-1"></i>Verified</span>}
                 </div>
               </div>
               <div className="col-auto">
@@ -233,7 +259,21 @@
                     <h6>{remedy.name}</h6>
                     <span className="badge bg-secondary">{remedy.category}</span>
                   </div>
-                  <button className="btn-unsave" title="Remove from saved">
+                  <button
+                    className="btn-unsave"
+                    title="Remove from saved"
+                    onClick={async () => {
+                      try {
+                        await requestJson(`/api/saved-remedies/${remedy.id}`, {
+                          method: "DELETE",
+                          headers: getAuthHeaders(),
+                        });
+                        setSavedRemedies((current) => current.filter((item) => String(item.id) !== String(remedy.id)));
+                      } catch {
+                        showToast("Failed to remove saved remedy", "error");
+                      }
+                    }}
+                  >
                     <i className="bi bi-bookmark-fill"></i>
                   </button>
                 </div>
@@ -316,15 +356,10 @@
         const [activeTab, setActiveTab] = useState("remedies");
         const [toast, setToast] = useState(null);
         const [isLoading, setIsLoading] = useState(true);
+        const [isVerified, setIsVerified] = useState(false);
 
         const [myRemedies, setMyRemedies] = useState([]);
-        const [savedRemedies, setSavedRemedies] = useState(() => {
-          try {
-            return JSON.parse(localStorage.getItem(SAVED_REMEDIES_KEY) || "[]");
-          } catch {
-            return [];
-          }
-        });
+        const [savedRemedies, setSavedRemedies] = useState([]);
 
         useEffect(() => {
           const loadProfile = async () => {
@@ -345,7 +380,8 @@
             const activeTabFromHash = window.location.hash === "#settings" ? "settings" : window.location.hash === "#saved" ? "saved" : "remedies";
             setActiveTab(activeTabFromHash);
 
-            setUser(parsedUser);
+            setUser(normalizeUser(parsedUser));
+            setIsVerified(false);
 
             if (token) {
               try {
@@ -354,10 +390,13 @@
                     Authorization: `Bearer ${token}`,
                   },
                 });
-                setUser(me.user);
-                localStorage.setItem("homeRemediesUser", JSON.stringify(me.user));
+                const verifiedUser = normalizeUser(me.user);
+                setUser(verifiedUser);
+                setIsVerified(true);
+                localStorage.setItem("homeRemediesUser", JSON.stringify(verifiedUser));
               } catch {
                 // Keep the locally cached user if the token check fails.
+                setIsVerified(false);
               }
             }
 
@@ -394,8 +433,13 @@
             }
 
             try {
-              const saved = JSON.parse(localStorage.getItem(SAVED_REMEDIES_KEY) || "[]");
-              setSavedRemedies(saved);
+              const savedData = await requestJson("/api/saved-remedies", {
+                headers: getAuthHeaders(),
+              });
+
+              setSavedRemedies(
+                (savedData.saved_remedies || []).map((remedy, index) => normalizeSavedRemedy(remedy, index)),
+              );
             } catch {
               setSavedRemedies([]);
             }
@@ -444,7 +488,7 @@
 
             <Navbar user={user} onLogout={handleLogout} />
 
-            <ProfileHeader user={user} stats={stats} />
+            <ProfileHeader user={user} stats={stats} isVerified={isVerified} />
 
             <div className="profile-content">
               <div className="container">

@@ -17,6 +17,11 @@ const remedySchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
+    image: {
+      type: String,
+      default: "",
+      trim: true,
+    },
     preparation_steps: {
       type: [String],
       required: true,

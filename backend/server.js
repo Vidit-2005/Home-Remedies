@@ -7,6 +7,7 @@ const authRoutes = require("./routes/auth.routes");
 const remedyRoutes = require("./routes/remedy.routes");
 const ratingRoutes = require("./routes/rating.routes");
 const categoryRoutes = require("./routes/category.routes");
+const savedRemedyRoutes = require("./routes/savedRemedy.routes");
 
 const app = express();
 
@@ -22,6 +23,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/remedies", remedyRoutes);
 app.use("/api/ratings", ratingRoutes);
 app.use("/api/categories", categoryRoutes);
+app.use("/api/saved-remedies", savedRemedyRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ message: "Route not found." });

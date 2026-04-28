@@ -59,6 +59,11 @@
         return data;
       };
 
+      const getAuthHeaders = () => {
+        const token = localStorage.getItem("homeRemediesToken");
+        return token ? { Authorization: `Bearer ${token}` } : {};
+      };
+
       const parseIngredientQuantity = (qtyText) => {
         const text = String(qtyText || "").trim();
         if (!text) {
@@ -490,32 +495,57 @@
       };
 
       // ==================== REMEDY MODAL ====================
-      const RemedyModal = ({ remedy, onClose, user, showToast }) => {
+      const RemedyModal = ({ remedy, onClose, user, showToast, onRatingUpdated }) => {
         if (!remedy) return null;
         const isGuest = user?.isGuest;
+        const [isSaving, setIsSaving] = useState(false);
+        const [isRating, setIsRating] = useState(false);
 
-        const handleSave = () => {
+        const handleRate = async (score) => {
+          if (isGuest) {
+            showToast("Please login to rate remedies", "warning");
+            return;
+          }
+
+          try {
+            setIsRating(true);
+            const data = await requestJson("/api/ratings", {
+              method: "POST",
+              headers: getAuthHeaders(),
+              body: JSON.stringify({
+                remedy_id: remedy.id,
+                score,
+                comment: "",
+              }),
+            });
+
+            onRatingUpdated?.(remedy.id, data.rating_summary);
+            showToast("Rating saved successfully!", "success");
+          } catch (error) {
+            showToast(error.message || "Failed to save rating", "error");
+          } finally {
+            setIsRating(false);
+          }
+        };
+
+        const handleSave = async () => {
           if (isGuest) {
             showToast("Please login to save remedies", "warning");
           } else {
-            const stored = localStorage.getItem(SAVED_REMEDIES_KEY);
-            const saved = stored ? JSON.parse(stored) : [];
-            const exists = saved.some((item) => String(item.id) === String(remedy.id));
+            try {
+              setIsSaving(true);
+              await requestJson("/api/saved-remedies", {
+                method: "POST",
+                headers: getAuthHeaders(),
+                body: JSON.stringify({ remedy_id: remedy.id }),
+              });
 
-            if (!exists) {
-              const updatedSaved = [
-                {
-                  id: remedy.id,
-                  name: remedy.name,
-                  category: remedy.category,
-                  image: remedy.image,
-                },
-                ...saved,
-              ];
-              localStorage.setItem(SAVED_REMEDIES_KEY, JSON.stringify(updatedSaved));
+              showToast("Remedy saved to MongoDB!", "success");
+            } catch (error) {
+              showToast(error.message || "Failed to save remedy", "error");
+            } finally {
+              setIsSaving(false);
             }
-
-            showToast("Remedy saved to your collection!", "success");
           }
         };
 
@@ -537,7 +567,16 @@
                 <h2 className="gradient-text">{remedy.name}</h2>
                 <div className="rating mb-3">
                   {[...Array(5)].map((_, i) => (
-                    <i key={i} className={`bi bi-star-fill ${i < Math.floor(remedy.rating) ? "text-warning" : "text-muted"}`}></i>
+                    <button
+                      key={i}
+                      type="button"
+                      className="btn btn-link p-0 border-0 me-1"
+                      disabled={isRating}
+                      onClick={() => handleRate(i + 1)}
+                      title={`Rate ${i + 1} star${i > 0 ? "s" : ""}`}
+                    >
+                      <i className={`bi bi-star-fill ${i < Math.floor(remedy.rating) ? "text-warning" : "text-muted"}`}></i>
+                    </button>
                   ))}
                   <span className="ms-2">{remedy.rating} rating</span>
                 </div>
@@ -584,11 +623,14 @@
                     </ol>
                   </div>
                 )}
-
                 <div className="modal-actions">
-                  <button className={`btn btn-lg ${isGuest ? 'btn-outline-secondary' : 'btn-primary'}`} onClick={handleSave}>
+                  <button
+                    className={`btn btn-lg ${isGuest ? 'btn-outline-secondary' : 'btn-primary'}`}
+                    onClick={handleSave}
+                    disabled={isSaving}
+                  >
                     <i className={`bi ${isGuest ? 'bi-lock' : 'bi-bookmark'} me-2`}></i>
-                    {isGuest ? 'Login to Save' : 'Save Remedy'}
+                    {isGuest ? 'Login to Save' : isSaving ? 'Saving...' : 'Save Remedy'}
                   </button>
                   <button className="btn btn-outline-light btn-lg">
                     <i className="bi bi-share me-2"></i>Share
@@ -854,6 +896,22 @@
           }
         };
 
+        const handleRatingUpdated = (remedyId, ratingSummary) => {
+          setRemedies((current) =>
+            current.map((item) =>
+              String(item.id) === String(remedyId)
+                ? { ...item, rating: ratingSummary?.average ?? item.rating }
+                : item,
+            ),
+          );
+
+          setSelectedRemedy((current) =>
+            current && String(current.id) === String(remedyId)
+              ? { ...current, rating: ratingSummary?.average ?? current.rating }
+              : current,
+          );
+        };
+
         const handleOpenAddModal = () => {
           if (user?.isGuest) {
             showToast("Please login to add remedies", "warning");
@@ -923,7 +981,13 @@
             <FloatingAddButton onClick={handleOpenAddModal} isGuest={isGuest} />
 
             {selectedRemedy && (
-              <RemedyModal remedy={selectedRemedy} onClose={() => setSelectedRemedy(null)} user={user} showToast={showToast} />
+              <RemedyModal
+                remedy={selectedRemedy}
+                onClose={() => setSelectedRemedy(null)}
+                user={user}
+                showToast={showToast}
+                onRatingUpdated={handleRatingUpdated}
+              />
             )}
 
             {showAddModal && (
