@@ -51,6 +51,38 @@
         ],
       };
 
+      const API_BASE_URL = "http://localhost:5000";
+
+      const requestJson = async (path, options = {}) => {
+        const response = await fetch(`${API_BASE_URL}${path}`, {
+          ...options,
+          headers: {
+            "Content-Type": "application/json",
+            ...(options.headers || {}),
+          },
+        });
+
+        const data = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+          throw new Error(data.message || "Request failed");
+        }
+
+        return data;
+      };
+
+      const saveAuthSession = (user, token) => {
+        const normalizedUser = {
+          ...user,
+          name: user?.name || user?.username || user?.email?.split("@")[0] || "User",
+        };
+
+        localStorage.setItem("homeRemediesUser", JSON.stringify(normalizedUser));
+        if (token) {
+          localStorage.setItem("homeRemediesToken", token);
+        }
+      };
+
       // ==================== TOAST NOTIFICATION ====================
       const Toast = ({ message, type, onClose }) => {
         useEffect(() => {
@@ -175,40 +207,32 @@
           setIsSubmitting(true);
           setError("");
 
-          setTimeout(() => {
-            // Authenticate user
-            let authenticatedUser = null;
+          (async () => {
+            try {
+              const payload =
+                userType === "admin"
+                  ? { username: email.trim(), password }
+                  : { email: email.trim(), password };
 
-            if (userType === "admin") {
-              authenticatedUser = USERS_DB.admins.find(
-                (u) => u.email === email && u.password === password,
-              );
-            } else {
-              authenticatedUser = USERS_DB.users.find(
-                (u) => u.email === email && u.password === password,
-              );
-            }
+              const data = await requestJson("/api/auth/login", {
+                method: "POST",
+                body: JSON.stringify(payload),
+              });
 
-            if (authenticatedUser) {
-              setIsSubmitting(false);
+              saveAuthSession(data.user, data.token);
               setSubmitSuccess(true);
               showToast("Login successful! Redirecting...", "success");
-
-              // Save user to localStorage
-              localStorage.setItem(
-                "homeRemediesUser",
-                JSON.stringify(authenticatedUser),
-              );
 
               setTimeout(() => {
                 window.location.href = "../Home Page/Index.html";
               }, 1500);
-            } else {
+            } catch (error) {
+              setError(error.message || "Invalid email or password");
+              showToast(error.message || "Invalid email or password", "error");
+            } finally {
               setIsSubmitting(false);
-              setError("Invalid email or password");
-              showToast("Invalid email or password", "error");
             }
-          }, 1000);
+          })();
         };
 
         return (
@@ -385,20 +409,36 @@
             return;
           }
           setIsSubmitting(true);
-          setTimeout(() => {
-            setIsSubmitting(false);
-            setSubmitSuccess(true);
-            showToast("Registration successful! Please login.", "success");
-            setTimeout(() => {
-              onShowLogin();
-            }, 2000);
-          }, 1500);
+
+          (async () => {
+            try {
+              await requestJson("/api/auth/register", {
+                method: "POST",
+                body: JSON.stringify({
+                  username: formData.name.trim(),
+                  email: formData.email.trim(),
+                  password: formData.password,
+                }),
+              });
+
+              setSubmitSuccess(true);
+              showToast("Registration successful! Please login.", "success");
+              setTimeout(() => {
+                onShowLogin();
+              }, 2000);
+            } catch (error) {
+              showToast(error.message || "Registration failed", "error");
+            } finally {
+              setIsSubmitting(false);
+            }
+          })();
         };
 
         return (
           <>
             <div className="d-flex align-items-center mb-3">
               <button
+                type="button"
                 className="btn btn-link text-muted p-0 me-3"
                 onClick={onShowLogin}
               >
@@ -512,20 +552,36 @@
         const handleSubmit = (e) => {
           e.preventDefault();
           setIsSubmitting(true);
-          setTimeout(() => {
-            setIsSubmitting(false);
-            setSubmitSuccess(true);
-            showToast("Sign up successful! Please login.", "success");
-            setTimeout(() => {
-              onShowLogin();
-            }, 2000);
-          }, 1500);
+
+          (async () => {
+            try {
+              await requestJson("/api/auth/register", {
+                method: "POST",
+                body: JSON.stringify({
+                  username: formData.name.trim(),
+                  email: formData.email.trim(),
+                  password: formData.password,
+                }),
+              });
+
+              setSubmitSuccess(true);
+              showToast("Sign up successful! Please login.", "success");
+              setTimeout(() => {
+                onShowLogin();
+              }, 2000);
+            } catch (error) {
+              showToast(error.message || "Sign up failed", "error");
+            } finally {
+              setIsSubmitting(false);
+            }
+          })();
         };
 
         return (
           <>
             <div className="d-flex align-items-center mb-3">
               <button
+                type="button"
                 className="btn btn-link text-muted p-0 me-3"
                 onClick={onShowLogin}
               >
@@ -717,7 +773,7 @@
         useEffect(() => {
           const loggedUser = localStorage.getItem("homeRemediesUser");
           if (loggedUser) {
-            window.location.href = "../Home Page/Index.html";
+            // window.location.href = "../Home Page/Index.html";
           }
         }, []);
 

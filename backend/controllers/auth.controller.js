@@ -24,6 +24,7 @@ const safeUser = (user) => ({
 });
 
 const register = async (req, res) => {
+  console.log("Registering user with data:", req.body);
   try {
     const { username, email, password, role } = req.body;
 

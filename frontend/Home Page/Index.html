@@ -38,6 +38,72 @@
         "https://images.unsplash.com/photo-1596547609652-9cf5d8c76921?w=300",
       ];
 
+      const API_BASE_URL = "http://localhost:5000";
+      const SAVED_REMEDIES_KEY = "homeRemediesSaved";
+
+      const requestJson = async (path, options = {}) => {
+        const response = await fetch(`${API_BASE_URL}${path}`, {
+          ...options,
+          headers: {
+            "Content-Type": "application/json",
+            ...(options.headers || {}),
+          },
+        });
+
+        const data = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+          throw new Error(data.message || "Request failed");
+        }
+
+        return data;
+      };
+
+      const parseIngredientQuantity = (qtyText) => {
+        const text = String(qtyText || "").trim();
+        if (!text) {
+          return { quantity: 1, unit: "item" };
+        }
+
+        const match = text.match(/^(\d+(?:\.\d+)?)\s*(.*)$/);
+        if (!match) {
+          return { quantity: 1, unit: text };
+        }
+
+        return {
+          quantity: Number(match[1]) || 1,
+          unit: match[2].trim() || "item",
+        };
+      };
+
+      const mapBackendRemedy = (remedy, index = 0) => {
+        const categoryName =
+          remedy.category_id?.category_name || remedy.category_name || remedy.category || "General";
+
+        return {
+          id: remedy._id || remedy.id,
+          name: remedy.title || remedy.name || "Untitled Remedy",
+          category: categoryName,
+          description: remedy.description || "",
+          ingredients: (remedy.ingredients || []).map((ingredient) => ({
+            name: ingredient.ingredient_name,
+            qty:
+              ingredient.quantity && ingredient.unit
+                ? `${ingredient.quantity} ${ingredient.unit}`.trim()
+                : ingredient.unit || String(ingredient.quantity || ""),
+          })),
+          preparation: remedy.preparation_steps || remedy.preparation || [],
+          rating: remedy.rating_summary?.average ?? remedy.rating ?? 0,
+          image: remedy.image || defaultImages[index % defaultImages.length],
+          addedBy:
+            remedy.user_id?.username ||
+            remedy.user_id?.email?.split("@")[0] ||
+            remedy.addedBy ||
+            "Home Remedies",
+          contributorEmail: remedy.user_id?.email || remedy.contributorEmail || "",
+        };
+      };
+
       // ==================== TOAST NOTIFICATION ====================
       const Toast = ({ message, type, onClose }) => {
         useEffect(() => {
@@ -360,8 +426,13 @@
       );
 
       // ==================== REMEDY CARD ====================
-      const RemedyCard = ({ remedy, onView }) => {
+      const RemedyCard = ({ remedy, onView, user }) => {
         const [isHovered, setIsHovered] = useState(false);
+        const isOwner =
+          user &&
+          ((remedy.contributorEmail || "").toLowerCase() === (user.email || "").toLowerCase() ||
+            remedy.addedBy === user.name ||
+            remedy.addedBy === user.username);
 
         return (
           <div className={`remedy-card ${isHovered ? "hovered" : ""}`} onMouseEnter={() => setIsHovered(true)} onMouseLeave={() => setIsHovered(false)} onClick={() => onView(remedy)}>
@@ -371,7 +442,7 @@
                 <button className="btn btn-light btn-sm">View Details</button>
               </div>
               <span className="category-badge">{remedy.category}</span>
-              {remedy.addedBy === "user" && <span className="user-badge"><i className="bi bi-person-fill"></i></span>}
+              {isOwner && <span className="user-badge"><i className="bi bi-person-fill"></i></span>}
             </div>
             <div className="card-content">
               <h5 className="card-title">{remedy.name}</h5>
@@ -398,7 +469,7 @@
       };
 
       // ==================== REMEDIES GRID ====================
-      const RemediesGrid = ({ remedies, onView }) => {
+      const RemediesGrid = ({ remedies, onView, user }) => {
         if (remedies.length === 0) {
           return (
             <div className="no-results">
@@ -412,7 +483,7 @@
         return (
           <div className="remedies-grid">
             {remedies.map((remedy) => (
-              <RemedyCard key={remedy.id} remedy={remedy} onView={onView} />
+              <RemedyCard key={remedy.id} remedy={remedy} onView={onView} user={user} />
             ))}
           </div>
         );
@@ -427,6 +498,23 @@
           if (isGuest) {
             showToast("Please login to save remedies", "warning");
           } else {
+            const stored = localStorage.getItem(SAVED_REMEDIES_KEY);
+            const saved = stored ? JSON.parse(stored) : [];
+            const exists = saved.some((item) => String(item.id) === String(remedy.id));
+
+            if (!exists) {
+              const updatedSaved = [
+                {
+                  id: remedy.id,
+                  name: remedy.name,
+                  category: remedy.category,
+                  image: remedy.image,
+                },
+                ...saved,
+              ];
+              localStorage.setItem(SAVED_REMEDIES_KEY, JSON.stringify(updatedSaved));
+            }
+
             showToast("Remedy saved to your collection!", "success");
           }
         };
@@ -645,6 +733,7 @@
         const [selectedRemedy, setSelectedRemedy] = useState(null);
         const [showAddModal, setShowAddModal] = useState(false);
         const [toast, setToast] = useState(null);
+        const [isLoading, setIsLoading] = useState(true);
 
         // Dynamically generate categories from remedies
         const categories = useMemo(() => {
@@ -653,18 +742,57 @@
         }, [remedies]);
 
         useEffect(() => {
-          const loggedUser = localStorage.getItem("homeRemediesUser");
-          if (loggedUser) {
-            setUser(JSON.parse(loggedUser));
-          } else {
-            window.location.href = "../Login/Index.html";
-          }
+          const initApp = async () => {
+            const loggedUser = localStorage.getItem("homeRemediesUser");
+            const token = localStorage.getItem("homeRemediesToken");
 
-          // Load saved remedies from localStorage
-          const savedRemedies = localStorage.getItem("homeRemediesData");
-          if (savedRemedies) {
-            setRemedies(JSON.parse(savedRemedies));
-          }
+            if (!loggedUser) {
+              window.location.href = "../Login/Index.html";
+              return;
+            }
+
+            const parsedUser = JSON.parse(loggedUser);
+
+            if (parsedUser?.isGuest) {
+              setUser(parsedUser);
+            } else if (token) {
+              try {
+                const me = await requestJson("/api/auth/me", {
+                  headers: {
+                    Authorization: `Bearer ${token}`,
+                  },
+                });
+                setUser(me.user);
+                localStorage.setItem("homeRemediesUser", JSON.stringify(me.user));
+              } catch {
+                setUser(parsedUser);
+              }
+            } else {
+              setUser(parsedUser);
+            }
+
+            try {
+              const data = await requestJson("/api/remedies");
+              const mappedRemedies = (data.remedies || []).map((remedy, index) =>
+                mapBackendRemedy(remedy, index),
+              );
+
+              const fallbackRemedies = mappedRemedies.length ? mappedRemedies : initialRemediesData;
+              setRemedies(fallbackRemedies);
+              localStorage.setItem("homeRemediesData", JSON.stringify(fallbackRemedies));
+            } catch {
+              const savedRemedies = localStorage.getItem("homeRemediesData");
+              if (savedRemedies) {
+                setRemedies(JSON.parse(savedRemedies));
+              } else {
+                setRemedies(initialRemediesData);
+              }
+            } finally {
+              setIsLoading(false);
+            }
+          };
+
+          initApp();
         }, []);
 
         const showToast = (message, type) => {
@@ -677,6 +805,7 @@
 
         const handleLogout = () => {
           localStorage.removeItem("homeRemediesUser");
+          localStorage.removeItem("homeRemediesToken");
           window.location.href = "../Login/Index.html";
         };
 
@@ -685,12 +814,44 @@
           setActiveCategory("All");
         };
 
-        const handleAddRemedy = (newRemedy) => {
-          const updatedRemedies = [newRemedy, ...remedies];
-          setRemedies(updatedRemedies);
-          localStorage.setItem("homeRemediesData", JSON.stringify(updatedRemedies));
-          setShowAddModal(false);
-          showToast("Remedy added successfully!", "success");
+        const handleAddRemedy = async (newRemedy) => {
+          try {
+            const token = localStorage.getItem("homeRemediesToken");
+            const payload = {
+              title: newRemedy.name,
+              description: newRemedy.description,
+              health_problem: newRemedy.category,
+              preparation_steps: newRemedy.preparation,
+              category_name: newRemedy.category,
+              ingredients: newRemedy.ingredients.map((ingredient) => {
+                const parsed = parseIngredientQuantity(ingredient.qty);
+                return {
+                  ingredient_name: ingredient.name,
+                  quantity: parsed.quantity,
+                  unit: parsed.unit,
+                };
+              }),
+            };
+
+            const data = await requestJson("/api/remedies", {
+              method: "POST",
+              headers: token
+                ? {
+                    Authorization: `Bearer ${token}`,
+                  }
+                : {},
+              body: JSON.stringify(payload),
+            });
+
+            const createdRemedy = mapBackendRemedy(data.remedy, 0);
+            const updatedRemedies = [createdRemedy, ...remedies];
+            setRemedies(updatedRemedies);
+            localStorage.setItem("homeRemediesData", JSON.stringify(updatedRemedies));
+            setShowAddModal(false);
+            showToast("Remedy added successfully!", "success");
+          } catch (error) {
+            showToast(error.message || "Failed to add remedy", "error");
+          }
         };
 
         const handleOpenAddModal = () => {
@@ -716,7 +877,7 @@
           return matchesSearch && matchesCategory;
         });
 
-        if (!user) {
+        if (isLoading) {
           return (
             <div className="loading-screen">
               <div className="spinner-border text-primary" role="status"></div>
@@ -753,7 +914,7 @@
                       </h4>
                       <span className="results-count">{filteredRemedies.length} remedies found</span>
                     </div>
-                    <RemediesGrid remedies={filteredRemedies} onView={setSelectedRemedy} />
+                    <RemediesGrid remedies={filteredRemedies} onView={setSelectedRemedy} user={user} />
                   </main>
                 </div>
               </div>

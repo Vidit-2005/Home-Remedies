@@ -19,6 +19,43 @@
     <script type="text/babel">
       const { useState, useEffect } = React;
 
+      const API_BASE_URL = "http://localhost:5000";
+      const SAVED_REMEDIES_KEY = "homeRemediesSaved";
+
+      const requestJson = async (path, options = {}) => {
+        const response = await fetch(`${API_BASE_URL}${path}`, {
+          ...options,
+          headers: {
+            "Content-Type": "application/json",
+            ...(options.headers || {}),
+          },
+        });
+
+        const data = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+          throw new Error(data.message || "Request failed");
+        }
+
+        return data;
+      };
+
+      const mapBackendRemedy = (remedy, index = 0) => ({
+        id: remedy._id || remedy.id,
+        name: remedy.title || remedy.name || "Untitled Remedy",
+        category:
+          remedy.category_id?.category_name || remedy.category_name || remedy.category || "General",
+        description: remedy.description || "",
+        image: remedy.image || `https://images.unsplash.com/photo-1544787219-7f47ccb76574?w=300&sig=${index}`,
+        rating: remedy.rating_summary?.average ?? remedy.rating ?? 0,
+        addedBy:
+          remedy.user_id?.username ||
+          remedy.user_id?.email?.split("@")[0] ||
+          remedy.addedBy ||
+          "Home Remedies",
+        contributorEmail: remedy.user_id?.email || remedy.contributorEmail || "",
+      });
+
       // ==================== TOAST NOTIFICATION ====================
       const Toast = ({ message, type, onClose }) => {
         useEffect(() => {
@@ -280,43 +317,98 @@
         const [toast, setToast] = useState(null);
         const [isLoading, setIsLoading] = useState(true);
 
-        // Sample data - in real app, this would come from API
         const [myRemedies, setMyRemedies] = useState([]);
-        const [savedRemedies, setSavedRemedies] = useState([]);
+        const [savedRemedies, setSavedRemedies] = useState(() => {
+          try {
+            return JSON.parse(localStorage.getItem(SAVED_REMEDIES_KEY) || "[]");
+          } catch {
+            return [];
+          }
+        });
 
         useEffect(() => {
-          // Check if user is logged in
-          const userData = localStorage.getItem("homeRemediesUser");
-          if (!userData) {
-            window.location.href = "../Login/Index.html";
-            return;
-          }
+          const loadProfile = async () => {
+            const userData = localStorage.getItem("homeRemediesUser");
+            const token = localStorage.getItem("homeRemediesToken");
 
-          const parsedUser = JSON.parse(userData);
-          if (parsedUser.isGuest) {
-            window.location.href = "../Login/Index.html";
-            return;
-          }
+            if (!userData) {
+              window.location.href = "../Login/Index.html";
+              return;
+            }
 
-          setUser(parsedUser);
+            const parsedUser = JSON.parse(userData);
+            if (parsedUser.isGuest) {
+              window.location.href = "../Login/Index.html";
+              return;
+            }
 
-          // Load user's remedies from localStorage
-          const storedRemedies = localStorage.getItem("homeRemedies");
-          if (storedRemedies) {
-            const allRemedies = JSON.parse(storedRemedies);
-            const userRemedies = allRemedies.filter(r =>
-              r.contributorEmail === parsedUser.email ||
-              r.addedBy === parsedUser.name ||
-              r.addedBy === parsedUser.email?.split("@")[0]
-            );
-            setMyRemedies(userRemedies);
-          }
+            const activeTabFromHash = window.location.hash === "#settings" ? "settings" : window.location.hash === "#saved" ? "saved" : "remedies";
+            setActiveTab(activeTabFromHash);
 
-          setIsLoading(false);
+            setUser(parsedUser);
+
+            if (token) {
+              try {
+                const me = await requestJson("/api/auth/me", {
+                  headers: {
+                    Authorization: `Bearer ${token}`,
+                  },
+                });
+                setUser(me.user);
+                localStorage.setItem("homeRemediesUser", JSON.stringify(me.user));
+              } catch {
+                // Keep the locally cached user if the token check fails.
+              }
+            }
+
+            try {
+              const data = await requestJson("/api/remedies");
+              const mappedRemedies = (data.remedies || []).map((remedy, index) =>
+                mapBackendRemedy(remedy, index),
+              );
+
+              const currentEmail = (parsedUser.email || "").toLowerCase();
+              const currentName = parsedUser.name || parsedUser.username || currentEmail.split("@")[0];
+
+              const userRemedies = mappedRemedies.filter((remedy) =>
+                remedy.contributorEmail?.toLowerCase() === currentEmail ||
+                remedy.addedBy === currentName ||
+                remedy.addedBy === currentEmail.split("@")[0]
+              );
+
+              setMyRemedies(userRemedies);
+            } catch {
+              const storedRemedies = localStorage.getItem("homeRemediesData");
+              if (storedRemedies) {
+                const allRemedies = JSON.parse(storedRemedies);
+                const currentEmail = (parsedUser.email || "").toLowerCase();
+                const currentName = parsedUser.name || parsedUser.username || currentEmail.split("@")[0];
+
+                const userRemedies = allRemedies.filter((r) =>
+                  (r.contributorEmail || "").toLowerCase() === currentEmail ||
+                  r.addedBy === currentName ||
+                  r.addedBy === currentEmail.split("@")[0]
+                );
+                setMyRemedies(userRemedies);
+              }
+            }
+
+            try {
+              const saved = JSON.parse(localStorage.getItem(SAVED_REMEDIES_KEY) || "[]");
+              setSavedRemedies(saved);
+            } catch {
+              setSavedRemedies([]);
+            }
+
+            setIsLoading(false);
+          };
+
+          loadProfile();
         }, []);
 
         const handleLogout = () => {
           localStorage.removeItem("homeRemediesUser");
+          localStorage.removeItem("homeRemediesToken");
           window.location.href = "../Login/Index.html";
         };
 
